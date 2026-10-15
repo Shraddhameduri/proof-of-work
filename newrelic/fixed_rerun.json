@@ -1,0 +1,11 @@
+{
+  "mode": "after",
+  "iterations": 20,
+  "handshakes": 0,
+  "errors": 20,
+  "loop_wall_s": 0.35075617599977704,
+  "load_default_certs_calls": 1,
+  "total_parse_s": 0.04834809099975246,
+  "mean_parse_ms": 48.34809099975246,
+  "parse_calls_per_iteration": 0.05
+}

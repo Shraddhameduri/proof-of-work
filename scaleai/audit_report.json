@@ -1,0 +1,88 @@
+{
+  "title": "MCP-Atlas issue #84 metadata-only provenance audit",
+  "audited_at": "2026-10-15T18:57:24.920593+00:00",
+  "repo_head": "5c11ac44e96d31b91b92a0affad5f2648255907a",
+  "checks": {
+    "A1_pinned_objects_exist": {
+      "commit": {
+        "oid": "f24ba3fb0bfa484c86acb28431fad6d7282455f9",
+        "exists": true
+      },
+      "tree": {
+        "oid": "e778a3323ad78e606a0dd3dcae7b4d39f5a61259",
+        "exists": true
+      },
+      "blob": {
+        "oid": "ab7fe6a09e2e90c2f6ccfc4799e3c4261b3126e2",
+        "exists": true
+      }
+    },
+    "A2_fixture_identical_pinned_to_head": {
+      "diff_empty": true,
+      "readme_blob_matches_pinned": true
+    },
+    "A3_fixture_introduction": {
+      "intro_commit_lines": [
+        "c64799a 2026-07-04 00:54:58 -0400 Release v2.0.0: TypeScript agent harness, scoring + diagnostics (#53)",
+        "b8fffac 2025-12-17 17:09:04 -0600 improve readme for clarity, change to default gpt-5.1"
+      ],
+      "fixture_text_change_lines": [
+        "b8fffac 2025-12-17 17:09:04 -0600 improve readme for clarity, change to default gpt-5.1"
+      ]
+    },
+    "A4_provenance_artifacts": {
+      "filename_matches": [
+        "PROVENANCE.md"
+      ],
+      "text_matches": [
+        "run_eval.py:52: # Versioned reference for the public dataset split (see PROVENANCE.md)."
+      ]
+    },
+    "A5_dataset_revision_pin": {
+      "load_dataset_calls": [
+        "DEFAULT_DATASET, split=\"train\",\n                          revision=DATASET_REVISION"
+      ],
+      "revision_pin_present": true
+    },
+    "A6_fixture_task_linkage": {
+      "section_has_task_id": false,
+      "section_has_revision": false,
+      "section_has_provenance_statement": false
+    },
+    "A7_hf_dataset_metadata": {
+      "retrieved_at": "2026-10-15T18:57:26.094635+00:00",
+      "dataset": "ScaleAI/MCP-Atlas",
+      "public": true,
+      "gated": false,
+      "disabled": false,
+      "license_tag": "license:cc-by-4.0",
+      "sha": "8c563b55d7c967755f474299848049834d624617",
+      "lastModified": "2026-08-03T18:16:35.000Z",
+      "files": [
+        ".gitattributes",
+        "MCP-Atlas.parquet",
+        "README.md"
+      ]
+    },
+    "A8_preview_exposure_history": {
+      "ten-row": [],
+      "10-row": [],
+      "preview rows": []
+    }
+  },
+  "verdict": {
+    "fixture_population_relationship_determinable": false,
+    "fixture_population_relationship_reasons": [
+      "Fixture carries no stable task ID (population uses 24-char TASK IDs).",
+      "Fixture carries no dataset revision/release pin.",
+      "No fixture-generation manifest, task-ID roster, mapping or attestation exists in the repo (A4).",
+      "run_eval.py loads ScaleAI/MCP-Atlas split 'train' with no revision pin \u2014 the public split floats (A5)."
+    ],
+    "provenance_artifact_exists": true,
+    "ten_row_preview_mapping_method_exists": false,
+    "ten_row_preview_mapping_method_reasons": [
+      "No preview rows, preview mapping, or preview documentation in the repo or its git history (A8).",
+      "Dataset card describes the 500-task public release; it documents no preview release or versioned preview->task-ID mapping."
+    ]
+  }
+}

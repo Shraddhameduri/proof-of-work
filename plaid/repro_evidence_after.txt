@@ -1,0 +1,17 @@
+plaid-python version: 45.0.0
+Configuration module: plaid.configuration
+
+[mode1 snake_case dict keys] OK
+
+[mode2 case-variant dict keys] OK
+
+[mode3 kwargs constructor] OK
+
+[mode4 case-insensitive lookup] OK
+
+[mode5 mutation normalizes] OK
+
+[baseline exact camelCase keys] OK
+
+============================================================
+FAILURES: 0 (none)

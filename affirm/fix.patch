@@ -1,0 +1,305 @@
+diff --git a/src/splinator/__init__.py b/src/splinator/__init__.py
+index 3a36182..8332bdf 100644
+--- a/src/splinator/__init__.py
++++ b/src/splinator/__init__.py
+@@ -2,6 +2,7 @@ from ._version import __version__
+ from .estimators import LinearSplineLogisticRegression
+ from .metrics import (
+     expected_calibration_error,
++    subsampled_smooth_calibration_error,
+     spiegelhalters_z_statistic,
+     ts_refinement_loss,
+     ts_brier_refinement,
+@@ -25,6 +26,7 @@ __all__ = [
+     "LinearSplineLogisticRegression",
+     "TemperatureScaling",
+     "expected_calibration_error",
++    "subsampled_smooth_calibration_error",
+     "spiegelhalters_z_statistic",
+     "ts_refinement_loss",
+     "ts_brier_refinement",
+diff --git a/src/splinator/metrics.py b/src/splinator/metrics.py
+index 8801a93..f85c9bb 100644
+--- a/src/splinator/metrics.py
++++ b/src/splinator/metrics.py
+@@ -16,9 +16,13 @@ References
+ .. [1] Berta, E., Holzmüller, D., Jordan, M. I., & Bach, F. (2025). Rethinking Early Stopping:
+        Refine, Then Calibrate. arXiv preprint arXiv:2501.19195.
+        https://arxiv.org/abs/2501.19195
++.. [2] Haghtalab, N., Qiao, M., Yang, K., & Zhao, E. (2024). Truthfulness of Calibration
++       Measures. arXiv preprint arXiv:2407.13979.
++       https://arxiv.org/abs/2407.13979
+ """
+ 
+ import numpy as np
++from scipy.optimize import linprog
+ from sklearn.calibration import calibration_curve
+ 
+ from splinator.temperature_scaling import (
+@@ -624,3 +628,129 @@ def brier_calibration_score(y_true, y_pred, sample_weight=None):
+     """
+     decomp = brier_decomposition(y_true, y_pred, sample_weight=sample_weight)
+     return decomp['calibration']
++
++
++def _smooth_calibration_error_raw(labels, preds):
++    # type: (np.array, np.array) -> float
++    """Raw (unnormalized) smooth calibration error, smCE [KF08]_.
++
++    Computes ``sup_f sum_t f(p_t) * (x_t - p_t)`` over all 1-Lipschitz
++    functions f : [0, 1] -> [-1, 1] exactly, via a linear program. The
++    objective only sees f at the sample predictions, so the supremum reduces
++    to choosing values v_i = f(p_i) with |v_i - v_j| <= |p_i - p_j| (only
++    adjacent pairs are needed once predictions are sorted; the rest follow
++    by the triangle inequality) and |v_i| <= 1. Any such values extend to an
++    admissible f (McShane extension of the sample values, clipped to
++    [-1, 1], which preserves 1-Lipschitzness), so the LP optimum equals the
++    true supremum.
++
++    .. [KF08] Kleinberg, J., Mullainathan, S., & Raghavan, M. (2016).
++       Inherent Trade-Offs in the Fair Determination of Risk Scores.
++       arXiv preprint arXiv:1609.05807. https://arxiv.org/abs/1609.05807
++    """
++    labels = np.asarray(labels, dtype=float).ravel()
++    preds = np.asarray(preds, dtype=float).ravel()
++    if labels.shape != preds.shape:
++        raise ValueError("labels and preds must have the same length")
++    n = labels.shape[0]
++    if n == 0:
++        return 0.0
++    residuals = labels - preds
++    order = np.argsort(preds, kind="mergesort")
++    p = preds[order]
++    r = residuals[order]
++    if n == 1:
++        return float(abs(r[0]))
++    # maximize r^T v  <=>  minimize (-r)^T v
++    c = -r
++    bounds = [(-1.0, 1.0)] * n
++    gaps = np.diff(p)  # >= 0 after sorting
++    m = n - 1
++    # |v_i - v_{i+1}| <= gaps_i  <=>
++    # v_i - v_{i+1} <= gaps_i and v_{i+1} - v_i <= gaps_i
++    A_ub = np.zeros((2 * m, n))
++    b_ub = np.zeros(2 * m)
++    idx = np.arange(m)
++    A_ub[idx, idx] = 1.0
++    A_ub[idx, idx + 1] = -1.0
++    A_ub[m + idx, idx] = -1.0
++    A_ub[m + idx, idx + 1] = 1.0
++    b_ub[:m] = gaps
++    b_ub[m:] = gaps
++    res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method="highs")
++    if not res.success:
++        raise RuntimeError(
++            "smCE linear program failed to converge: %s" % res.message
++        )
++    return float(max(0.0, -res.fun))
++
++
++def subsampled_smooth_calibration_error(labels, preds, n_draws=100, random_state=None):
++    # type: (np.array, np.array, int, object) -> float
++    """Subsampled Smooth Calibration Error (SSCE) [2]_.
++
++    A calibration metric introduced by Haghtalab et al. (2024): the expected
++    smooth calibration error over uniformly random subsets of the data,
++
++        SSCE(x, p) = E_{S ~ Unif(2^[T])}[ smCE(x|_S, p|_S) ],
++
++    where smCE is the supremum, over 1-Lipschitz f : [0, 1] -> [-1, 1], of
++    ``sum_t f(p_t) * (x_t - p_t)``. The paper's headline result is that SSCE
++    is (approximately) truthful: a forecaster (approximately) minimizes the
++    expected penalty by predicting the conditional expectation of each
++    outcome, unlike ECE-style measures which reward strategic misreporting.
++
++    The expectation over all 2^T subsets is estimated by Monte Carlo with
++    ``n_draws`` Bernoulli(1/2) masks. The raw paper-scale value lies in
++    [0, T/2]; this implementation rescales by 2/T so the metric lies in
++    [0, 1], comparable with ECE.
++
++    Parameters
++    ----------
++    labels : array-like of shape (n_samples,)
++        True binary labels (0 or 1).
++    preds : array-like of shape (n_samples,)
++        Predicted probabilities in [0, 1].
++    n_draws : int, default=100
++        Number of random subsets used for the Monte Carlo estimate of the
++        subsampling expectation.
++    random_state : int, RandomState or Generator, optional
++        Seed or generator for the subset masks (reproducibility).
++
++    Returns
++    -------
++    ssce : float
++        Subsampled Smooth Calibration Error in [0, 1]; 0 is perfectly
++        calibrated.
++
++    Examples
++    --------
++    >>> import numpy as np
++    >>> from splinator import subsampled_smooth_calibration_error
++    >>> labels = np.array([0, 0, 1, 1])
++    >>> preds = np.array([0.2, 0.3, 0.7, 0.8])
++    >>> err = subsampled_smooth_calibration_error(labels, preds,
++    ...                                           n_draws=500, random_state=0)
++    >>> 0.0 <= err <= 1.0
++    True
++
++    References
++    ----------
++    .. [2] Haghtalab, N., Qiao, M., Yang, K., & Zhao, E. (2024). Truthfulness
++           of Calibration Measures. arXiv preprint arXiv:2407.13979.
++           https://arxiv.org/abs/2407.13979
++    """
++    labels = np.asarray(labels, dtype=float).ravel()
++    preds = np.asarray(preds, dtype=float).ravel()
++    if labels.shape != preds.shape:
++        raise ValueError("labels and preds must have the same length")
++    n = labels.shape[0]
++    if n == 0:
++        return 0.0
++    rng = np.random.default_rng(random_state)
++    total = 0.0
++    for _ in range(int(n_draws)):
++        mask = rng.random(n) < 0.5
++        total += _smooth_calibration_error_raw(labels[mask], preds[mask])
++    # Paper-scale E[smCE] lies in [0, T/2]; rescale to [0, 1].
++    return float(total / float(n_draws) / (n / 2.0))
+diff --git a/tests/test_ssce.py b/tests/test_ssce.py
+new file mode 100644
+index 0000000..05e5bc5
+--- /dev/null
++++ b/tests/test_ssce.py
+@@ -0,0 +1,131 @@
++"""Tests for subsampled_smooth_calibration_error (SSCE, Affirm/splinator#10).
++
++Implements the Subsampled Smooth Calibration Error of Haghtalab, Qiao,
++Yang & Zhao (2024), "Truthfulness of Calibration Measures"
++(arXiv:2407.13979), Definition 2.1:
++
++    SSCE(x, p) = E_{S ~ Unif(2^[T])}[ smCE(x|_S, p|_S) ],
++
++rescaled by 2/T into [0, 1] (the paper-scale value lies in [0, T/2]).
++"""
++
++import itertools
++
++import numpy as np
++import pytest
++
++from splinator import subsampled_smooth_calibration_error
++from splinator.metrics import _smooth_calibration_error_raw
++
++
++def _exact_enumerated_ssce(labels, preds):
++    """Exact SSCE by enumerating all 2^T subsets (paper scale rescaled)."""
++    n = len(labels)
++    total = 0.0
++    for r in range(n + 1):
++        for combo in itertools.combinations(range(n), r):
++            mask = np.zeros(n, dtype=bool)
++            mask[list(combo)] = True
++            total += _smooth_calibration_error_raw(labels[mask], preds[mask])
++    return float(total / (2 ** n) / (n / 2.0))
++
++
++class TestSmoothCalibrationErrorRaw:
++    def test_empty(self):
++        assert _smooth_calibration_error_raw([], []) == 0.0
++
++    def test_single_sample(self):
++        # sup_{|v|<=1} v * (1 - 0.3) = 0.7
++        assert _smooth_calibration_error_raw([1], [0.3]) == pytest.approx(0.7)
++
++    def test_constant_preds_opposite_residuals_cancel(self):
++        # residuals +0.5 and -0.5 at the same prediction: single v -> 0
++        assert _smooth_calibration_error_raw([1, 0], [0.5, 0.5]) == pytest.approx(0.0)
++
++    def test_constant_preds_aligned(self):
++        # residuals +0.5, +0.5 at one prediction: v=1 -> 1.0
++        assert _smooth_calibration_error_raw([1, 1], [0.5, 0.5]) == pytest.approx(1.0)
++
++    def test_lipschitz_constraint_binds(self):
++        # preds 0 and 1, residuals +1 and -1: best f has f(0)=1, f(1)=0 -> 1.0
++        assert _smooth_calibration_error_raw([1, 0], [0.0, 1.0]) == pytest.approx(1.0)
++
++    def test_mismatched_lengths(self):
++        with pytest.raises(ValueError):
++            _smooth_calibration_error_raw([1, 0], [0.5])
++
++
++class TestSSCE:
++    def test_empty(self):
++        assert subsampled_smooth_calibration_error([], []) == 0.0
++
++    def test_mismatched_lengths(self):
++        with pytest.raises(ValueError):
++            subsampled_smooth_calibration_error([1, 0], [0.5])
++
++    def test_range_bounds(self):
++        rng = np.random.default_rng(7)
++        labels = (rng.random(300) < 0.5).astype(float)
++        preds = rng.random(300)
++        err = subsampled_smooth_calibration_error(labels, preds, n_draws=200,
++                                                  random_state=7)
++        assert 0.0 <= err <= 1.0
++
++    def test_reproducible_with_seed(self):
++        rng = np.random.default_rng(3)
++        labels = (rng.random(80) < 0.4).astype(float)
++        preds = rng.random(80)
++        a = subsampled_smooth_calibration_error(labels, preds, n_draws=200,
++                                                random_state=11)
++        b = subsampled_smooth_calibration_error(labels, preds, n_draws=200,
++                                                random_state=11)
++        assert a == b
++
++    def test_constant_miscalibration_known_value(self):
++        # All labels 0, all preds 0.8: smCE(S) = 0.8*|S| exactly, so
++        # E[smCE] = 0.8*T/2 and the rescaled metric is exactly 0.8.
++        n = 100
++        labels = np.zeros(n)
++        preds = np.full(n, 0.8)
++        err = subsampled_smooth_calibration_error(labels, preds, n_draws=2000,
++                                                  random_state=0)
++        assert err == pytest.approx(0.8, abs=0.02)
++
++    def test_single_sample_known_value(self):
++        # smCE = 0.7 on S={1}, 0 on S=empty -> E = 0.35, rescaled x2 -> 0.7
++        err = subsampled_smooth_calibration_error(np.array([1.0]),
++                                                  np.array([0.3]),
++                                                  n_draws=4000,
++                                                  random_state=1)
++        assert err == pytest.approx(0.7, abs=0.02)
++
++    def test_monte_carlo_matches_exact_enumeration(self):
++        labels = np.array([1.0, 0.0, 1.0])
++        preds = np.array([0.8, 0.2, 0.6])
++        exact = _exact_enumerated_ssce(labels, preds)
++        approx = subsampled_smooth_calibration_error(labels, preds,
++                                                     n_draws=8000,
++                                                     random_state=5)
++        assert approx == pytest.approx(exact, abs=0.02)
++
++    def test_calibrated_near_zero(self):
++        # Truthfully calibrated forecaster: SSCE should be small noise.
++        rng = np.random.default_rng(42)
++        true_probs = rng.random(400)
++        labels = (rng.random(400) < true_probs).astype(float)
++        err = subsampled_smooth_calibration_error(labels, true_probs,
++                                                  n_draws=500,
++                                                  random_state=42)
++        assert err < 0.15
++
++    def test_miscalibrated_larger_than_calibrated(self):
++        rng = np.random.default_rng(9)
++        true_probs = rng.random(300)
++        labels = (rng.random(300) < true_probs).astype(float)
++        calibrated = subsampled_smooth_calibration_error(labels, true_probs,
++                                                         n_draws=500,
++                                                         random_state=9)
++        # Deliberately misreport: flip probabilities around 0.5
++        miscalibrated = subsampled_smooth_calibration_error(
++            labels, 1.0 - true_probs, n_draws=500, random_state=9)
++        assert miscalibrated > 3 * calibrated

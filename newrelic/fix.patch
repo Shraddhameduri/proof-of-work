@@ -1,0 +1,67 @@
+diff --git a/newrelic/common/agent_http.py b/newrelic/common/agent_http.py
+index bbd1cdd..0cbd048 100644
+--- a/newrelic/common/agent_http.py
++++ b/newrelic/common/agent_http.py
+@@ -288,6 +288,24 @@ class HttpClient(BaseClient):
+                     connection_kwargs["ca_cert_dir"] = ca_bundle_path
+                 else:
+                     connection_kwargs["ca_certs"] = ca_bundle_path
++            else:
++                # On Linux (and POSIX systems generally) get_default_verify_paths()
++                # resolves, so ca_bundle_path stays None and urllib3 takes its
++                # "load OS default certs" branch: with ssl_context unset, the
++                # vendored connection code calls create_urllib3_context() AND
++                # load_default_certs() on EVERY new connection. The agent
++                # deliberately closes the collector connection after each
++                # harvest, so the whole CA store is re-parsed per harvest.
++                # Build the SSLContext once per client and share it; urllib3
++                # skips the reload when ssl_context is supplied, while closing
++                # the socket per harvest keeps working as before. Only done
++                # when no explicit ca_bundle_path is set, so verification
++                # behaviour is unchanged (same default system trust store).
++                context = urllib3.util.ssl_.create_urllib3_context(
++                    cert_reqs=ssl.CERT_NONE if disable_certificate_validation else None
++                )
++                context.load_default_certs()
++                connection_kwargs["ssl_context"] = context
+ 
+             if disable_certificate_validation:
+                 connection_kwargs["cert_reqs"] = "NONE"
+diff --git a/tests/agent_unittests/test_http_client.py b/tests/agent_unittests/test_http_client.py
+index ad1bffc..dc97fad 100644
+--- a/tests/agent_unittests/test_http_client.py
++++ b/tests/agent_unittests/test_http_client.py
+@@ -606,3 +606,33 @@ def test_closed_connection():
+     with HttpClient("localhost", MockExternalHTTPServer.get_open_port()) as client:
+         with pytest.raises(NetworkInterfaceException):
+             client.send_request()
++
++
++def test_shared_ssl_context_default_path():
++    # Default path (no explicit ca_bundle_path, system CA store resolvable):
++    # one SSLContext with the system store pre-loaded is created per client
++    # and handed to the connection pool, so urllib3 skips the per-connection
++    # load_default_certs() re-parse (newrelic/newrelic-python-agent#1834).
++    client = HttpClient("localhost")
++    context = client._connection_kwargs.get("ssl_context")
++    assert isinstance(context, ssl.SSLContext)
++    assert context.verify_mode == ssl.CERT_REQUIRED
++    assert context.check_hostname is True
++    assert len(context.get_ca_certs()) > 0
++    assert "ca_certs" not in client._connection_kwargs
++
++
++def test_shared_ssl_context_disabled_validation():
++    client = HttpClient("localhost", disable_certificate_validation=True)
++    context = client._connection_kwargs.get("ssl_context")
++    assert isinstance(context, ssl.SSLContext)
++    assert context.verify_mode == ssl.CERT_NONE
++    assert client._connection_kwargs["cert_reqs"] == "NONE"
++
++
++def test_shared_ssl_context_not_set_with_explicit_bundle():
++    # Explicit ca_bundle_path: verification behaviour must stay exactly as
++    # before — the shared-context optimisation must not be injected.
++    client = HttpClient("localhost", ca_bundle_path=CERT_PATH)
++    assert "ssl_context" not in client._connection_kwargs
++    assert client._connection_kwargs["ca_certs"] == CERT_PATH

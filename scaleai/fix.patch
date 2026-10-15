@@ -1,0 +1,99 @@
+diff --git a/PROVENANCE.md b/PROVENANCE.md
+new file mode 100644
+index 0000000..74b26ad
+--- /dev/null
++++ b/PROVENANCE.md
+@@ -0,0 +1,68 @@
++# Provenance notes: README smoke-test fixture and the public dataset split
++
++Metadata-only document. No benchmark task content (prompts, claims,
++trajectories, answers) was opened to produce it. Prepared in response to
++[scaleapi/mcp-atlas#84](https://github.com/scaleapi/mcp-atlas/issues/84).
++
++## The README smoke-test fixture
++
++The fixture is the "Smoke-test one task" example in `README.md`
++(prompt: "What is the first word of the file at /data/Barber Shop.csv?",
++enabled tools `["filesystem_read_text_file"]`, expected answer "Customer",
++sandbox image `ghcr.io/scaleapi/mcp-atlas:1.2.7`).
++
++Established facts (all verifiable from git objects):
++
++| Fact | Value |
++|------|-------|
++| Fixture introduced | commit `b8fffac`, 2025-12-17 ("improve readme for clarity, change to default gpt-5.1") |
++| Expected-answer line added | commit `c64799a`, 2026-07-04 (Release v2.0.0) |
++| Fixture text at pinned README blob `ab7fe6a09e2e90c2f6ccfc4799e3c4261b3126e2` (commit `f24ba3fb0bfa484c86acb28431fad6d7282455f9`, tree `e778a3323ad78e606a0dd3dcae7b4d39f5a61259`, 2026-08-03) | byte-identical to `README.md` at HEAD |
++| Fixture section sha256 (heading through the closing curl fence) | `792b13907089a327f72c5f43970ca15c3d9516e93cea2fc714d283884f6716e9` |
++| Stable task ID on the fixture | none (population uses 24-char TASK IDs; the fixture carries none) |
++| Dataset revision/release pin on the fixture | none |
++| Fixture-generation provenance statement | none exists in the repo |
++
++## The public dataset split
++
++- Dataset: `ScaleAI/MCP-Atlas` on Hugging Face — public, ungated, CC-BY-4.0,
++  single parquet file (`MCP-Atlas.parquet`), `train` split, ~500 tasks.
++  Columns include `TASK` (unique 24-char ID), `PROMPT`, `ENABLED_TOOLS`,
++  `GTFA_CLAIMS`, `TRAJECTORY`.
++- Point-in-time metadata (retrieved 2026-10-15): dataset sha
++  `8c563b55d7c967755f474299848049834d624617`, last modified
++  `2026-08-03T18:16:35Z`.
++- `run_eval.py` now loads the dataset with an explicit revision pin
++  (`DATASET_REVISION`), so the public split is versioned and reproducible
++  instead of floating.
++
++## Findings (metadata-only verdict)
++
++1. **Fixture-to-population relationship: NOT DETERMINABLE from public,
++   non-content-bearing artifacts.** The fixture carries no stable task ID and
++   no dataset revision pin; the repo contains no fixture-generation manifest,
++   task-ID roster, mapping, or attestation that could establish whether the
++   fixture is independently synthetic, derived from, or identical to a
++   released benchmark task. Establishing it would require either a
++   maintainer-provided manifest or opening task content, which this document
++   deliberately does not do.
++2. **No public, versioned, non-content-bearing provenance artifact exists in
++   this repo.** A filename/content scan for manifest/roster/attestation/
++   provenance terms returns zero hits.
++3. **No stable, versioned, non-content-bearing method exists for mapping the
++   historical ten-row public-preview exposure to stable task IDs and dataset
++   revision.** No preview rows, preview documentation, or preview mapping
++   appear in the repo, its git history, or the dataset card.
++
++## What would close the gap (request to maintainers)
++
++- A fixture-generation manifest that records, for each README fixture, either
++  a stable task ID + dataset revision, or an explicit "independently
++  synthetic" attestation.
++- A published, versioned task-ID roster per dataset release.
++- A versioned mapping artifact for the historical ten-row preview exposure.
++- Revision-pinned dataset references in code (started here with
++  `DATASET_REVISION` in `run_eval.py`).
++
++Until those exist, any provenance claim about the fixture is unverifiable
++from public metadata, and this document marks it as such.
+diff --git a/run_eval.py b/run_eval.py
+index 57df0ee..6243e40 100644
+--- a/run_eval.py
++++ b/run_eval.py
+@@ -49,6 +49,10 @@ csv.field_size_limit(sys.maxsize)
+ HARNESS_URL = os.getenv("HARNESS_URL", "http://localhost:3001")
+ SANDBOX_URL = os.getenv("MCP_SANDBOX_URL", "http://localhost:1984")
+ DEFAULT_DATASET = "ScaleAI/MCP-Atlas"
++# Versioned reference for the public dataset split (see PROVENANCE.md).
++# Pin the HuggingFace dataset revision so evals are reproducible instead of
++# floating with the latest upload. Observed 2026-10-15; update with care.
++DATASET_REVISION = "8c563b55d7c967755f474299848049834d624617"
+ DEFAULT_SANDBOX_IMAGE = "ghcr.io/scaleapi/mcp-atlas:1.2.7"
+ 
+ 
+@@ -94,7 +98,8 @@ def load_tasks(input_path: str | None, num_tasks: int | None) -> list[dict[str,
+     else:
+         from datasets import load_dataset
+         print(f"Loading {DEFAULT_DATASET} from HuggingFace...")
+-        ds = load_dataset(DEFAULT_DATASET, split="train")
++        ds = load_dataset(DEFAULT_DATASET, split="train",
++                          revision=DATASET_REVISION)
+         rows = list(ds)
+         print(f"Loaded {len(rows)} tasks from {DEFAULT_DATASET}")
+     if num_tasks:

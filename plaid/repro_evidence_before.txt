@@ -1,0 +1,35 @@
+Traceback (most recent call last):
+  File "/home/hatch/workspace/proof-of-work/plaid/repro.py", line 20, in check
+    ok = fn()
+         ^^^^
+  File "/home/hatch/workspace/proof-of-work/plaid/repro.py", line 47, in mode3_kwargs_constructor
+    c = Configuration(
+        ^^^^^^^^^^^^^^
+TypeError: Configuration.__init__() got an unexpected keyword argument 'client_id'
+Traceback (most recent call last):
+  File "/home/hatch/workspace/proof-of-work/plaid/repro.py", line 20, in check
+    ok = fn()
+         ^^^^
+  File "/home/hatch/workspace/proof-of-work/plaid/repro.py", line 65, in mode4_case_insensitive_lookup
+    return c.api_key["client_id"] == "CID"
+           ~~~~~~~~~^^^^^^^^^^^^^
+KeyError: 'client_id'
+plaid-python version: 45.0.0
+Configuration module: plaid.configuration
+
+[mode1 snake_case dict keys] FAILS
+
+[mode2 case-variant dict keys] FAILS
+
+[mode3 kwargs constructor] EXCEPTION:
+[mode3 kwargs constructor] FAILS
+
+[mode4 case-insensitive lookup] EXCEPTION:
+[mode4 case-insensitive lookup] FAILS
+
+[mode5 mutation normalizes] FAILS
+
+[baseline exact camelCase keys] OK
+
+============================================================
+FAILURES: 5 ['mode1 snake_case dict keys', 'mode2 case-variant dict keys', 'mode3 kwargs constructor', 'mode4 case-insensitive lookup', 'mode5 mutation normalizes']
